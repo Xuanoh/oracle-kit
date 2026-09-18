@@ -1,7 +1,8 @@
 # Installation and browser setup
 
 Install the patched CLI from [Oracle Kit](https://github.com/Xuanoh/oracle-kit)
-using Node.js 24+ and npm. The repository README contains CLI and skill setup.
+using Node.js 24+ and npm. The repository [setup guide](https://github.com/Xuanoh/oracle-kit/blob/main/docs/setup.md)
+contains CLI and skill setup.
 Use `oracle --help` to confirm the command resolves, and check for the
 `--browser-surface` option. Do not silently substitute an upstream npm release
 when this adapter is required. Installing the skill alone does not install the CLI.
