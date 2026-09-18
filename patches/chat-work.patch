@@ -1,0 +1,833 @@
+--- a/dist/bin/oracle-cli.js
++++ b/dist/bin/oracle-cli.js
+@@ -227,7 +227,7 @@
+     .addOption(new Option("--copy-markdown", "Copy the assembled markdown bundle to the clipboard; pair with --render to print it too.").default(false))
+     .addOption(new Option("--copy").hideHelp().default(false))
+     .option("-s, --slug <words>", "Custom session slug (3-5 words).")
+-    .option("-m, --model <model>", 'Model to target (gpt-5.5-pro default). GPT-5.6 aliases: gpt-5.6 and gpt-5.6-sol (OpenAI API or ChatGPT browser). Also gpt-5.5, gpt-5.4-pro, gpt-5.4, gpt-5.1-pro, gpt-5-pro, gpt-5.1, gpt-5.1-codex API-only, gpt-5.2, gpt-5.2-instant, gpt-5.2-pro, gemini-3.1-flash-lite, gemini-3.5-flash, gemini-3.1-pro, legacy gemini-3-pro, claude-4.6-sonnet, claude-4.1-opus, or ChatGPT labels like "5.5 Pro" / "5.2 Thinking" for browser runs).', normalizeModelOption)
++    .option("-m, --model <model>", 'Model target (gpt-5.5-pro default). Chat: latest, gpt-6-astra (Latest + Pro), gpt-5.6-sol, gpt-5.5; Work: default, gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5. Select interface with --browser-surface. API also supports other provider model IDs.', normalizeModelOption)
+     .addOption(new Option("--models <models>", 'Comma-separated API model list to query in parallel (e.g., "gpt-5.5-pro,gemini-3-pro").')
+     .argParser(collectModelList)
+     .default([]))
+@@ -329,10 +329,10 @@
+     .addOption(new Option("--browser-headless", "Launch Chrome in headless mode.").hideHelp())
+     .addOption(new Option("--browser-hide-window", "Hide the Chrome window after launch (macOS headful only).").hideHelp())
+     .addOption(new Option("--browser-keep-browser", "Keep Chrome running after completion.").hideHelp())
+-    .addOption(new Option("--browser-model-strategy <mode>", "ChatGPT model picker strategy: select (default) switches to the requested model, current keeps the active model, ignore skips the picker entirely.").choices(["select", "current", "ignore"]))
+-    .addOption(new Option("--browser-thinking-time <level>", "Thinking time intensity for Thinking/Pro models: light, standard, extended, heavy, or ChatGPT UI aliases.")
+-    .argParser(parseThinkingTimeOption)
+-    .hideHelp())
++    .addOption(new Option("--browser-model-strategy <mode>", "ChatGPT selection strategy: select sets the requested model; current retains the model; ignore retains model and strength. The modern picker is read for selection evidence.").choices(["select", "current", "ignore"]))
++    .addOption(new Option("--browser-surface <surface>", "ChatGPT interface to use: chat or work. Model and reasoning options differ.").choices(["chat", "work"]))
++    .addOption(new Option("--browser-thinking-time <level>", "Chat: instant, medium, high, xhigh, pro. Work: low, medium, high, xhigh, max, ultra (model-dependent). Explicit requests require verified selection.")
++    .argParser(parseThinkingTimeOption))
+     .addOption(new Option("--browser-research <mode>", "Browser research mode: deep activates ChatGPT Deep Research.").choices(["off", "deep"]))
+     .addOption(new Option("--browser-archive <mode>", "Archive completed ChatGPT browser conversations after local artifacts are saved (auto archives successful non-project one-shots only).").choices(["auto", "always", "never"]))
+     .addOption(new Option("--browser-follow-up <prompt>", "Submit an additional prompt in the same ChatGPT browser conversation after the initial answer; repeat for multi-turn consults.")
+@@ -1002,7 +1002,7 @@
+         userConfig,
+         env: process.env,
+     });
+-    const remoteHost = remoteConfig.host;
++    const remoteHost = options.remoteChrome && remoteConfig.sources.host !== "cli" ? undefined : remoteConfig.host;
+     const remoteToken = remoteConfig.token;
+     if (remoteHost) {
+         console.log(chalk.dim(`Remote browser host detected: ${remoteHost}`));
+@@ -1035,10 +1035,12 @@
+         options.baseUrl = userConfig.apiBaseUrl;
+     }
+     const providerMode = resolveApiProviderMode(options);
++    const engineModelArg = normalizeModelOption(options.model) || DEFAULT_MODEL;
+     const engineModels = multiModelProvided
+         ? Array.from(new Set(options.models.map((entry) => resolveApiModel(entry))))
+-        : [resolveApiModel(normalizeModelOption(options.model) || DEFAULT_MODEL)];
++        : [["gpt-chat-latest", "gpt-work-default"].includes(engineModelArg) ? engineModelArg : resolveApiModel(engineModelArg)];
+     if (options.route || options.preflight) {
++        engineModels.forEach((model) => resolveApiModel(model));
+         const routeAzureEndpoint = firstNonEmpty(options.azureEndpoint, process.env.AZURE_OPENAI_ENDPOINT, userConfig.azure?.endpoint);
+         const configuredAzureForRoute = routeAzureEndpoint
+             ? {
+@@ -1664,7 +1666,7 @@
+         userConfig,
+         env: process.env,
+     });
+-    const remoteHost = remoteConfig.host;
++    const remoteHost = (options.remoteChrome || browserConfig?.remoteChrome) && remoteConfig.sources.host !== "cli" ? undefined : remoteConfig.host;
+     const remoteToken = remoteConfig.token;
+     if (remoteHost && engine !== "browser") {
+         throw new Error("--remote-host requires a browser session.");
+--- a/dist/src/browser/actions/modelSelection.js
++++ b/dist/src/browser/actions/modelSelection.js
+@@ -68,11 +68,17 @@
+         }
+     }
+ }
+-function assertResolvedModelSelection(desiredModel, resolvedLabel) {
++export function assertResolvedModelSelection(desiredModel, resolvedLabel) {
+     const desired = desiredModel.toLowerCase();
+     const resolved = resolvedLabel.toLowerCase();
+     const normalizedDesired = normalizeResolvedModelLabel(desired);
+     const normalizedResolved = normalizeResolvedModelLabel(resolved);
++    if (normalizedDesired === "gpt 6 astra") {
++        if (!/(?:^| )gpt 6 astra(?: |$)/.test(normalizedResolved) || normalizedResolved.split(" ").includes("pro")) {
++            throw new Error(`Model picker selected "${resolvedLabel}" while "${desiredModel}" requires GPT-6 Astra.`);
++        }
++        return;
++    }
+     const wantsGpt56Sol = /(?:^| )5 6(?: |$)/.test(normalizedDesired) && normalizedDesired.split(" ").includes("sol");
+     if (wantsGpt56Sol) {
+         const resolvedTokens = normalizedResolved.split(" ");
+@@ -165,7 +171,9 @@
+       .map((token) => normalizeText(token))
+       .filter(Boolean);
+     const targetWords = normalizedTarget.split(' ').filter(Boolean);
+-    const desiredVersion = normalizedTarget.includes('5 6')
++    const desiredVersion = normalizedTarget === 'gpt 6 astra'
++      ? '6'
++      : normalizedTarget.includes('5 6')
+       ? '5-6'
+       : normalizedTarget.includes('5 5')
+         ? '5-5'
+@@ -180,7 +188,7 @@
+           : normalizedTarget.includes('5 0')
+             ? '5-0'
+           : null;
+-    const desiredModelVariant = normalizedTarget.includes(' sol') ? 'sol' : null;
++    const desiredModelVariant = normalizedTarget.includes(' astra') ? 'astra' : normalizedTarget.includes(' sol') ? 'sol' : null;
+     const wantsPro = normalizedTarget.includes(' pro') || normalizedTarget.endsWith(' pro') || normalizedTokens.includes('pro');
+     const wantsInstant = normalizedTarget.includes('instant');
+     const wantsThinking = normalizedTarget.includes('thinking');
+@@ -337,11 +345,13 @@
+       return 1000;
+     };
+     const versionFromLabel = (label) => {
++      if (normalizeText(label).split(' ').includes('6') && !normalizeText(label).includes('5 6')) return '6';
+       const match = normalizeText(label).match(/(?:^| )(?:gpt )?(\\d+) (\\d+)(?: |$)/);
+       return match ? match[1] + '-' + match[2] : null;
+     };
+     const versionFromTestId = (testid) => {
+       const normalized = normalizeText(testid);
++      if (normalized.split(' ').includes('6') && !normalized.includes('5 6')) return '6';
+       if (normalized.includes('5 6') || normalized.includes('gpt56')) return '5-6';
+       if (normalized.includes('5 5') || normalized.includes('gpt55')) return '5-5';
+       if (normalized.includes('5 4') || normalized.includes('gpt54')) return '5-4';
+@@ -377,7 +387,7 @@
+         !configuredVersionLabel.includes(desiredModelVariant) &&
+         !configuredVariant.includes(desiredModelVariant)
+       ) return false;
+-      if (desiredModelVariant === 'sol' && labelHasProWord(configuredVariant)) return false;
++      if (desiredModelVariant && labelHasProWord(configuredVariant)) return false;
+       if (wantsPro) return labelHasProWord(configuredVariant);
+       if (wantsInstant) return configuredVariant.includes('instant');
+       if (wantsThinking) {
+@@ -443,7 +453,7 @@
+       if (configuredSelectionMatchesTarget()) return true;
+       const normalizedLabel = normalizeText(getButtonLabel());
+       if (!normalizedLabel) return false;
+-      if (desiredModelVariant === 'sol' && hasProComposerPill()) return false;
++      if (desiredModelVariant && hasProComposerPill()) return false;
+       if (wantsThinking && !wantsPro && hasProComposerPill()) return false;
+       if (isTargetGpt55VisibleAlias(normalizedLabel)) return true;
+       if (
+@@ -468,6 +478,7 @@
+         return true;
+       }
+       if (desiredVersion) {
++        if (desiredVersion === '6' && versionFromLabel(normalizedLabel) !== '6') return false;
+         if (desiredVersion === '5-6' && !normalizedLabel.includes('5 6')) return false;
+         if (desiredVersion === '5-5' && !normalizedLabel.includes('5 5')) return false;
+         if (desiredVersion === '5-4' && !normalizedLabel.includes('5 4')) return false;
+@@ -504,7 +515,7 @@
+       if (!signal) {
+         return COMPOSER_SIGNAL_ALLOW_BLANK;
+       }
+-      if (desiredModelVariant === 'sol' && hasProComposerPill()) {
++      if (desiredModelVariant && hasProComposerPill()) {
+         return false;
+       }
+       if (wantsPro && labelHasLegacyProVersion(signal)) {
+@@ -722,7 +733,7 @@
+       const candidateClearsProForThinking =
+         wantsThinking && !wantsPro && hasActiveProPill && candidateIsNonProThinkingEffort;
+       const candidateOpensVersionSubmenu =
+-        (desiredVersion === '5-6' && candidateIsVersionSubmenuTrigger) ||
++        ((desiredVersion === '5-6' || desiredVersion === '6') && candidateIsVersionSubmenuTrigger) ||
+         (wantsThinking &&
+           desiredVersion !== '5-5' &&
+           normalizedText === 'gpt 5 5' &&
+@@ -773,7 +784,7 @@
+           node?.getAttribute?.('aria-haspopup') === 'menu' ||
+           node?.getAttribute?.('data-has-submenu') !== null);
+       if (wantsPro && candidateHasThinking) return 0;
+-      if (desiredModelVariant === 'sol' && candidateHasPro) return 0;
++      if (desiredModelVariant && candidateHasPro) return 0;
+       if (wantsPro && candidateHasLegacyProVersion && !candidateSelectsDesiredVersion) return 0;
+       if (wantsPro && !candidateHasPro && !candidateSelectsDesiredVersion) return 0;
+       if (
+@@ -931,10 +942,10 @@
+       if (desiredVersion && optionVersion !== desiredVersion) return false;
+       if (desiredModelVariant && !normalizedText.includes(desiredModelVariant)) return false;
+       if (
+-        desiredModelVariant === 'sol' &&
++        desiredModelVariant &&
+         (labelHasProWord(normalizedText) || normalizeText(testid ?? '').includes('pro'))
+       ) return false;
+-      if (desiredVersion === '5-6') return !hasProComposerPill();
++      if (desiredVersion === '5-6' || desiredVersion === '6') return !hasProComposerPill();
+       const currentButtonLabel = normalizeText(getButtonLabel());
+       return !labelHasProWord(currentButtonLabel) && !hasProComposerPill();
+     };
+@@ -1145,6 +1156,9 @@
+         .replace(/[^a-z0-9]+/g, " ")
+         .replace(/\s+/g, " ")
+         .trim();
++    if (normalized === "gpt 6 astra") {
++        return { includesAny: ["gpt 6 astra"], excludesAny: ["pro"], allowBlank: false };
++    }
+     if (normalized.includes("5 6")) {
+         return { includesAny: ["5 6 sol"], excludesAny: ["pro"], allowBlank: false };
+     }
+--- a/dist/src/browser/actions/thinkingTime.js
++++ b/dist/src/browser/actions/thinkingTime.js
+@@ -1,6 +1,7 @@
+ import { MENU_CONTAINER_SELECTOR, MENU_ITEM_SELECTOR, MODEL_BUTTON_SELECTOR, } from "../constants.js";
+ import { logDomFailure } from "../domDebug.js";
+ import { buildClickDispatcher } from "./domEvents.js";
++import { ensureModelSelection, assertResolvedModelSelection } from "./modelSelection.js";
+ const BROWSER_THINKING_LOG_PREFIX = "[browser] Thinking time:";
+ function formatBrowserThinkingLog(message) {
+     return `${BROWSER_THINKING_LOG_PREFIX} ${message.replace(/^Thinking time:\s*/, "")}`;
+@@ -23,22 +24,26 @@
+ /**
+  * Selects a thinking-time level in ChatGPT's composer.
+  *
+- * Missing controls remain best-effort except Pro Extended, which fails closed
+- * unless the selected option is confirmed.
++ * Explicit requests require a confirmed selected option.
+  */
+ export async function ensureThinkingTime(Runtime, level, logger, desiredModel) {
+     const result = await evaluateThinkingTimeSelection(Runtime, level, desiredModel);
+     const capitalizedLevel = level.charAt(0).toUpperCase() + level.slice(1);
+     const targetModelKind = inferThinkingTargetModelKind(desiredModel);
+-    const observedModelKind = result && "modelKind" in result ? result.modelKind : null;
+-    const strictProEffort = (targetModelKind === "pro" || observedModelKind === "pro") && level === "extended";
++    if (result?.status === "already-selected" || result?.status === "switched") {
++        if (desiredModel) {
++            const modelEvidence = await ensureModelSelection(Runtime, desiredModel, logger, "current");
++            assertResolvedModelSelection(desiredModel, modelEvidence.resolvedLabel ?? "");
++        }
++        logger(`[browser] Reasoning selection: ${JSON.stringify({ requestedModel: desiredModel ?? null, requestedLevel: level, resolvedLabel: result.label, verified: true })}`);
++    }
+     switch (result?.status) {
+         case "already-selected":
+             logger(formatBrowserThinkingLog(`${result.label ?? capitalizedLevel} (already selected)`));
+-            return;
++            return { requestedLevel: level, resolvedLabel: result.label, verified: true, status: result.status };
+         case "switched":
+             logger(formatBrowserThinkingLog(result.label ?? capitalizedLevel));
+-            return;
++            return { requestedLevel: level, resolvedLabel: result.label, verified: true, status: result.status };
+         case "chip-not-found":
+         case "menu-not-found":
+         case "option-not-found":
+@@ -52,20 +57,12 @@
+                     ? ` for ${targetModelKind}`
+                     : "";
+             const message = `Thinking time: ${result.status.replaceAll("-", " ")}${kindHint} (requested ${capitalizedLevel})`;
+-            if (strictProEffort) {
+-                throw new Error(`${message}; refusing to submit without confirmed Pro Extended.`);
+-            }
+-            logger(formatBrowserThinkingLog(`${message}; continuing with ChatGPT default.`));
+-            return;
++            throw new Error(`${message}; refusing to submit without confirmed requested reasoning intensity.`);
+         }
+         default: {
+             await logDomFailure(Runtime, logger, "thinking-time-unknown");
+             logPickerDiagnostic(result, logger);
+-            if (strictProEffort) {
+-                throw new Error(`Thinking time: unknown outcome selecting ${capitalizedLevel}; refusing to submit without confirmed Pro Extended.`);
+-            }
+-            logger(formatBrowserThinkingLog(`unknown outcome selecting ${capitalizedLevel}; continuing with ChatGPT default.`));
+-            return;
++            throw new Error(`Thinking time: unknown outcome selecting ${capitalizedLevel}; refusing to submit without confirmed requested reasoning intensity.`);
+         }
+     }
+ }
+@@ -124,7 +121,7 @@
+     const modelButtonLiteral = JSON.stringify(MODEL_BUTTON_SELECTOR);
+     const targetLevelLiteral = JSON.stringify(level.toLowerCase());
+     const targetModelKindLiteral = JSON.stringify(inferThinkingTargetModelKind(desiredModel));
+-    const targetIsGpt56ModelLiteral = JSON.stringify(/(?:^|[^0-9])5[._ -]6(?:[^0-9]|$)/i.test(desiredModel ?? ""));
++    const targetIsGpt56ModelLiteral = JSON.stringify(/(?:^|[^0-9])5[._ -]6(?:[^0-9]|$)|gpt[ -]?6(?:[ -]astra)?$/i.test(desiredModel ?? ""));
+     return `(async () => {
+     ${buildClickDispatcher()}
+ 
+@@ -137,7 +134,7 @@
+ 
+     // Bilingual matchers: English level token + observed Chinese variants.
+     const LEVEL_TOKENS = {
+-      light: ['light', 'instant', '轻', '极速'],
++      light: ['light', 'instant', 'low', '轻', '低', '极速'],
+       standard: ['standard', 'medium', '标准', '中'],
+       extended: ['extended', 'high', '扩展', '深度', '加强', '高'],
+       heavy: ['heavy', 'extra high', '重度', '加重', '极高'],
+@@ -404,7 +401,7 @@
+           return item;
+         }
+       }
+-      if (TARGET_LEVEL === 'heavy') {
++      if (TARGET_LEVEL === 'heavy' && !TARGET_IS_GPT56_MODEL) {
+         // Older Chinese layouts used bare 高 for the highest effort. Keep it
+         // only as a second-pass exact fallback so a current 高 row can never
+         // win before the primary 极高 row.
+--- a/dist/src/browser/config.js
++++ b/dist/src/browser/config.js
+@@ -112,6 +112,8 @@
+         remoteChromeBrowserWSEndpoint: config?.remoteChromeBrowserWSEndpoint ?? DEFAULT_BROWSER_CONFIG.remoteChromeBrowserWSEndpoint,
+         remoteChromeProfileRoot: config?.remoteChromeProfileRoot ?? DEFAULT_BROWSER_CONFIG.remoteChromeProfileRoot,
+         thinkingTime: config?.thinkingTime,
++        surface: config?.surface ?? "chat",
++        selectionPlan: config?.selectionPlan,
+         researchMode,
+         archiveConversations,
+         resumeConversationUrl: config?.resumeConversationUrl ?? DEFAULT_BROWSER_CONFIG.resumeConversationUrl,
+--- a/dist/src/browser/index.js
++++ b/dist/src/browser/index.js
+@@ -10,6 +10,7 @@
+ import { INPUT_SELECTORS } from "./constants.js";
+ import { uploadAttachmentViaDataTransfer } from "./actions/remoteFileTransfer.js";
+ import { ensureThinkingTime } from "./actions/thinkingTime.js";
++import { ensureChatGptSelection } from "./actions/chatGptSelection.js";
+ import { startThinkingStatusMonitor } from "./actions/thinkingStatus.js";
+ import { activateDeepResearch, captureDeepResearchTargetKeys, waitForDeepResearchCompletion, waitForResearchPlanAutoConfirm, } from "./actions/deepResearch.js";
+ import { estimateTokenCount, withRetries, delay } from "./utils.js";
+@@ -1044,7 +1045,11 @@
+         const updateConversationHint = conversationUrlMonitor.update;
+         await captureRuntimeSnapshot();
+         const modelStrategy = config.modelStrategy ?? DEFAULT_MODEL_STRATEGY;
+-        if (config.desiredModel && modelStrategy !== "ignore" && !isResumingConversation) {
++        if (config.selectionPlan) {
++            modelSelectionEvidence = await raceWithDisconnect(ensureChatGptSelection(Runtime, config.selectionPlan, logger, { observeOnly: isResumingConversation }));
++            await raceWithDisconnect(ensurePromptReady(Runtime, config.inputTimeoutMs, logger));
++        }
++        else if (config.desiredModel && modelStrategy !== "ignore" && !isResumingConversation) {
+             modelSelectionEvidence = await raceWithDisconnect(withRetries(() => ensureModelSelection(Runtime, config.desiredModel, logger, modelStrategy), {
+                 retries: 2,
+                 delayMs: 300,
+@@ -1072,7 +1077,7 @@
+         const deepResearch = config.researchMode === "deep";
+         // Handle thinking time selection if specified. Deep Research owns its own effort flow.
+         const thinkingTime = config.thinkingTime;
+-        if (thinkingTime && !deepResearch) {
++        if (thinkingTime && !deepResearch && !config.selectionPlan) {
+             const thinkingTargetModel = modelStrategy === "select" ? config.desiredModel : null;
+             await raceWithDisconnect(withRetries(() => ensureThinkingTime(Runtime, thinkingTime, logger, thinkingTargetModel), {
+                 retries: 2,
+@@ -2364,7 +2369,11 @@
+             // ignore
+         }
+         const modelStrategy = config.modelStrategy ?? DEFAULT_MODEL_STRATEGY;
+-        if (config.desiredModel && modelStrategy !== "ignore" && !config.resumeConversationUrl) {
++        if (config.selectionPlan) {
++            modelSelectionEvidence = await ensureChatGptSelection(Runtime, config.selectionPlan, logger, { observeOnly: Boolean(config.resumeConversationUrl) });
++            await ensurePromptReady(Runtime, config.inputTimeoutMs, logger);
++        }
++        else if (config.desiredModel && modelStrategy !== "ignore" && !config.resumeConversationUrl) {
+             modelSelectionEvidence = await withRetries(() => ensureModelSelection(Runtime, config.desiredModel, logger, modelStrategy), {
+                 retries: 2,
+                 delayMs: 300,
+@@ -2386,7 +2395,7 @@
+         const deepResearch = config.researchMode === "deep";
+         // Handle thinking time selection if specified. Deep Research owns its own effort flow.
+         const thinkingTime = config.thinkingTime;
+-        if (thinkingTime && !deepResearch) {
++        if (thinkingTime && !deepResearch && !config.selectionPlan) {
+             const thinkingTargetModel = modelStrategy === "select" ? config.desiredModel : null;
+             await withRetries(() => ensureThinkingTime(Runtime, thinkingTime, logger, thinkingTargetModel), {
+                 retries: 2,
+--- a/dist/src/cli/browserConfig.js
++++ b/dist/src/cli/browserConfig.js
+@@ -6,6 +6,7 @@
+ import { parseDuration } from "../duration.js";
+ import { normalizeBrowserModelStrategy } from "../browser/modelStrategy.js";
+ import { getOracleHomeDir } from "../oracleHome.js";
++import { resolveChatGptSelection } from "../browser/selectionPlan.js";
+ const DEFAULT_BROWSER_TIMEOUT_MS = 1_200_000;
+ const DEFAULT_BROWSER_INPUT_TIMEOUT_MS = 60_000;
+ const DEFAULT_BROWSER_ATTACHMENT_TIMEOUT_MS = 45_000;
+@@ -15,12 +16,17 @@
+ // Ordered array: most specific models first to ensure correct selection.
+ // The browser label is passed to the model picker which fuzzy-matches against ChatGPT's UI.
+ const BROWSER_MODEL_LABELS = [
++    ["gpt-chat-latest", "Latest"],
++    ["gpt-work-default", "Default"],
++    ["gpt-5.6-terra", "GPT-5.6 Terra"],
++    ["gpt-5.6-luna", "GPT-5.6 Luna"],
++    ["gpt-6-astra", "GPT-6 Astra"],
+     // Most specific first (e.g., "gpt-5.2-thinking" before "gpt-5.2")
+     ["gpt-5.6-sol", "GPT-5.6 Sol"],
+     ["gpt-5.6", "GPT-5.6 Sol"],
+     ["gpt-5.5-pro", "Pro"],
+     ["gpt-5.5-instant", "GPT-5.5 Instant"],
+-    ["gpt-5.5", "Thinking 5.5"],
++    ["gpt-5.5", "GPT-5.5"],
+     ["gpt-5.4-pro", "Pro"],
+     ["gpt-5.2-thinking", "GPT-5.2 Thinking"],
+     ["gpt-5.2-instant", "GPT-5.2 Instant"],
+@@ -42,7 +48,9 @@
+     if (!normalized.startsWith("gpt-") || normalized.includes("codex")) {
+         return model;
+     }
+-    if (normalized === "gpt-5.6-sol" ||
++    if (normalized === "gpt-6-astra" ||
++        normalized === "gpt-5-pro" ||
++        normalized === "gpt-5.6-sol" ||
+         normalized === "gpt-5.6" ||
+         normalized === "gpt-5.5-pro" ||
+         normalized === "gpt-5.5-instant" ||
+@@ -113,6 +121,14 @@
+         : shouldUseOverride
+             ? desiredModelOverride
+             : mapModelToBrowserLabel(options.model);
++    const selectionPlan = isChatGptModel ? resolveChatGptSelection({
++        surface: options.browserSurface ?? "chat",
++        model: options.model,
++        thinkingTime: options.browserThinkingTime,
++        strategy: modelStrategy,
++        researchMode: options.browserResearch,
++    }) : undefined;
++    if (!isChatGptModel && options.browserSurface === "work") throw new Error("--browser-surface work requires a ChatGPT model.");
+     return {
+         chromeProfile: options.copyProfile
+             ? (options.browserChromeProfile ?? null)
+@@ -166,14 +182,16 @@
+         manualLoginProfileDir: options.browserManualLoginProfileDir ?? undefined,
+         copyProfileSource: options.copyProfile ?? undefined,
+         hideWindow: options.browserHideWindow ? true : undefined,
+-        desiredModel,
++        desiredModel: selectionPlan?.modelLabel ?? desiredModel,
++        selectionPlan,
++        surface: options.browserSurface ?? "chat",
+         modelStrategy,
+         debug: options.verbose ? true : undefined,
+         // Allow cookie failures by default so runs can continue without Chrome/Keychain secrets.
+         allowCookieErrors: options.browserAllowCookieErrors ?? true,
+         remoteChrome,
+         browserTabRef: options.browserTab ?? undefined,
+-        thinkingTime: normalizeThinkingTimeLevel(options.browserThinkingTime) ?? undefined,
++        thinkingTime: selectionPlan?.level ?? normalizeThinkingTimeLevel(options.browserThinkingTime) ?? undefined,
+         researchMode: options.browserResearch === "deep" ? "deep" : "off",
+         archiveConversations: options.browserArchive,
+     };
+--- a/dist/src/cli/browserDefaults.js
++++ b/dist/src/cli/browserDefaults.js
+@@ -90,6 +90,9 @@
+     if (isUnset("browserModelStrategy") && browser.modelStrategy !== undefined) {
+         options.browserModelStrategy = browser.modelStrategy;
+     }
++    if (isUnset("browserSurface") && browser.surface !== undefined) {
++        options.browserSurface = browser.surface;
++    }
+     if (!currentModelRequestedByCli &&
+         isUnset("browserThinkingTime") &&
+         browser.thinkingTime !== undefined) {
+--- a/dist/src/cli/dryRun.js
++++ b/dist/src/cli/dryRun.js
+@@ -97,6 +97,7 @@
+     const suffix = buildTokenEstimateSuffix(artifacts);
+     const headerLine = `[preview] Oracle (${version}) browser mode (${runOptions.model}) with ~${artifacts.estimatedInputTokens.toLocaleString()} tokens${suffix}.`;
+     log(chalk.cyan(headerLine));
++    log(`[preview] Surface: ${browserConfig?.surface ?? "chat"}; model menu: ${browserConfig?.desiredModel ?? runOptions.model}; thinking time: ${browserConfig?.thinkingTime ?? "current setting (not selected)"}.`);
+     logBrowserControlPlan(browserConfig, log, "preview");
+     logBrowserFollowUpSummary(runOptions.browserFollowUps, log, "preview");
+     logBrowserFileSummary(artifacts, log, "preview");
+@@ -109,6 +110,10 @@
+         const previewPayload = {
+             model: runOptions.model,
+             engine: "browser",
++            surface: browserConfig?.surface ?? "chat",
++            selectionPlan: browserConfig?.selectionPlan ?? null,
++            desiredModel: browserConfig?.desiredModel ?? runOptions.model,
++            thinkingTime: browserConfig?.thinkingTime ?? null,
+             composerText: artifacts.composerText,
+             attachments: attachmentSummary,
+             inlineFileCount: artifacts.inlineFileCount,
+--- a/dist/src/cli/options.js
++++ b/dist/src/cli/options.js
+@@ -133,10 +133,16 @@
+     if (normalized) {
+         return normalized;
+     }
+-    throw new InvalidArgumentError('Thinking time must be one of "light", "standard", "extended", "heavy", or a ChatGPT UI alias like "instant", "medium", "high", or "extra-high".');
++    throw new InvalidArgumentError('Thinking time must be instant, low, medium, high, xhigh, max, ultra, or pro (availability depends on Chat/Work and model).');
+ }
+ export function normalizeModelOption(value) {
+-    return (value ?? "").trim();
++    const trimmed = (value ?? "").trim();
++    if (/^(?:latest|gpt-chat-latest)$/i.test(trimmed)) return "gpt-chat-latest";
++    if (/^(?:default|gpt-work-default)$/i.test(trimmed)) return "gpt-work-default";
++    if (/^(?:chatgpt|gpt)[ -]?6(?:[ -]astra)?$/i.test(trimmed)) {
++        return "gpt-6-astra";
++    }
++    return trimmed;
+ }
+ export function normalizeBaseUrl(value) {
+     const trimmed = value?.trim();
+@@ -181,6 +187,12 @@
+ }
+ export function resolveApiModel(modelValue) {
+     const normalized = normalizeModelOption(modelValue).toLowerCase();
++    if (["gpt-chat-latest", "gpt-work-default"].includes(normalized)) {
++        throw new InvalidArgumentError("Latest and Default are browser menu targets, not API model IDs.");
++    }
++    if (/^gpt-6(?:[._-]|$)/.test(normalized)) {
++        return normalized;
++    }
+     if (normalized in MODEL_CONFIGS) {
+         return normalized;
+     }
+@@ -271,6 +283,10 @@
+ }
+ export function inferModelFromLabel(modelValue) {
+     const normalized = normalizeModelOption(modelValue).toLowerCase();
++    if (["gpt-chat-latest", "gpt-work-default"].includes(normalized)) return normalized;
++    if (/^(?:chatgpt|gpt)[ -]?6(?:[ ._-]|$)/.test(normalized) && normalized !== "gpt-6-astra") {
++        throw new InvalidArgumentError(`Unknown GPT-6 browser variant "${modelValue}". Use gpt-6-astra.`);
++    }
+     if (!normalized) {
+         return DEFAULT_MODEL;
+     }
+@@ -318,9 +334,9 @@
+         const { variant } = gpt56Label;
+         if (!variant)
+             return "gpt-5.6";
+-        if (variant === "sol")
+-            return "gpt-5.6-sol";
+-        throw new InvalidArgumentError(`Unknown GPT-5.6 browser variant "${variant}". Use gpt-5.6 or gpt-5.6-sol.`);
++        if (["sol", "terra", "luna", "sol pro"].includes(variant))
++            return `gpt-5.6-${variant.replace(" ", "-")}`;
++        throw new InvalidArgumentError(`Unknown GPT-5.6 browser variant "${variant}". Use sol, terra, or luna; availability depends on Chat/Work.`);
+     }
+     if (normalized.includes("thinking") && normalized.includes("heavy")) {
+         return "gpt-5.5";
+--- a/dist/src/cli/perfTrace.js
++++ b/dist/src/cli/perfTrace.js
+@@ -30,6 +30,8 @@
+     "--browser-input-timeout",
+     "--browser-max-concurrent-tabs",
+     "--browser-model-strategy",
++    "--browser-surface",
++    "--browser-thinking-time",
+     "--browser-port",
+     "--browser-profile-lock-timeout",
+     "--browser-recheck-delay",
+--- a/dist/src/cli/runOptions.js
++++ b/dist/src/cli/runOptions.js
+@@ -24,7 +24,8 @@
+         .map((entry) => normalizeModelOption(entry))
+         .filter(Boolean);
+     const cliModelArg = normalizeModelOption(model ?? userConfig?.model) || DEFAULT_MODEL;
+-    const apiModel = resolveApiModel(cliModelArg);
++    const apiModel = resolvedEngine === "browser" && ["gpt-chat-latest", "gpt-work-default"].includes(cliModelArg)
++        ? cliModelArg : resolveApiModel(cliModelArg);
+     // Browser label inference is intentionally engine-scoped: API model ids such as
+     // gpt-5.6-luna must remain provider values even though browser mode rejects
+     // unrecognized GPT-5.6 picker variants.
+--- a/dist/src/oracle/config.js
++++ b/dist/src/oracle/config.js
+@@ -30,6 +30,15 @@
+ // supported limit at the base-rate boundary until cost estimation supports tiers.
+ const GPT_5_6_BASE_RATE_INPUT_LIMIT = 272_000;
+ export const MODEL_CONFIGS = {
++    "gpt-6-astra": {
++        model: "gpt-6-astra",
++        provider: "openai",
++        tokenizer: countTokensGpt5,
++        inputLimit: 272_000,
++        pricing: null,
++        reasoning: { effort: "xhigh" },
++        searchToolType: "web_search",
++    },
+     "gpt-5.6": {
+         model: "gpt-5.6",
+         provider: "openai",
+--- a/dist/src/oracle/modelResolver.js
++++ b/dist/src/oracle/modelResolver.js
+@@ -239,7 +239,8 @@
+         }
+         else if (isRecord(reasoning) &&
+             typeof reasoning.effort === "string" &&
+-            VALID_REASONING_EFFORTS.includes(reasoning.effort)) {
++            (VALID_REASONING_EFFORTS.includes(reasoning.effort) ||
++                (model === "gpt-6-astra" && reasoning.effort === "max"))) {
+             result.reasoning = { effort: reasoning.effort };
+         }
+         // Malformed reasoning override is ignored (base value preserved).
+--- a/dist/src/oracle/thinkingTime.js
++++ b/dist/src/oracle/thinkingTime.js
+@@ -1,4 +1,4 @@
+-export const THINKING_TIME_LEVELS = ["light", "standard", "extended", "heavy"];
++export const THINKING_TIME_LEVELS = ["instant", "light", "standard", "extended", "heavy", "max", "ultra", "pro"];
+ export const THINKING_TIME_ALIASES = [
+     "instant",
+     "low",
+@@ -19,8 +19,12 @@
+         .toLowerCase()
+         .replace(/[_\s]+/g, "-");
+     switch (normalized) {
+-        case "light":
++        case "max":
++        case "ultra":
++        case "pro":
+         case "instant":
++            return normalized;
++        case "light":
+         case "low":
+             return "light";
+         case "standard":
+--- /dev/null
++++ b/dist/src/browser/selectionPlan.js
+@@ -0,0 +1,90 @@
++import { normalizeThinkingTimeLevel } from "../oracle/thinkingTime.js";
++
++export const CHAT_LEVELS = ["instant", "medium", "high", "xhigh", "pro"];
++export const WORK_LEVELS = ["low", "medium", "high", "xhigh", "max", "ultra"];
++const WORK_MODELS = {
++    "gpt-6-astra": "GPT-6 Astra",
++    "gpt-5.6": "GPT-5.6 Sol",
++    "gpt-5.6-sol": "GPT-5.6 Sol",
++    "gpt-5.6-terra": "GPT-5.6 Terra",
++    "gpt-5.6-luna": "GPT-5.6 Luna",
++    "gpt-5.5": "GPT-5.5",
++    "gpt-work-default": "Default",
++};
++
++export function canonicalBrowserEffort(value, surface) {
++    if (value == null || value === "") return null;
++    const normalized = normalizeThinkingTimeLevel(value);
++    const level = {
++        light: surface === "chat" ? "instant" : "low",
++        standard: "medium",
++        extended: "high",
++        heavy: "xhigh",
++    }[normalized] ?? normalized;
++    const supported = surface === "chat" ? CHAT_LEVELS : WORK_LEVELS;
++    if (!supported.includes(level)) {
++        throw new Error(`Unsupported ${surface} reasoning intensity "${value}". Use ${supported.join(", ")}.`);
++    }
++    return level;
++}
++
++export function levelsForSelection(surface, modelLabel) {
++    if (surface === "chat") {
++        if (!["Latest", "GPT-5.6 Sol", "GPT-5.5"].includes(modelLabel)) throw new Error(`Unsupported Chat model "${modelLabel}".`);
++        return CHAT_LEVELS;
++    }
++    if (modelLabel === "GPT-5.6 Luna") return WORK_LEVELS.slice(0, 5);
++    if (modelLabel === "GPT-5.5") return WORK_LEVELS.slice(0, 4);
++    if (modelLabel === "Default") return null;
++    if (Object.values(WORK_MODELS).includes(modelLabel)) return WORK_LEVELS;
++    throw new Error(`Unsupported Work model "${modelLabel}".`);
++}
++
++export function selectionCapabilities(surface) {
++    const labels = surface === "chat" ? ["Latest", "GPT-5.6 Sol", "GPT-5.5"] : [...new Set(Object.values(WORK_MODELS))];
++    return Object.fromEntries(labels.map((label) => [label, levelsForSelection(surface, label)]));
++}
++
++export function resolveChatGptSelection({ surface = "chat", model, thinkingTime, strategy = "select", researchMode = "off" }) {
++    if (!["chat", "work"].includes(surface)) throw new Error(`Unknown ChatGPT surface "${surface}".`);
++    let level = canonicalBrowserEffort(thinkingTime, surface);
++    let modelLabel = null;
++    if (strategy === "ignore" && level) {
++        throw new Error("An explicit reasoning intensity cannot be combined with --browser-model-strategy ignore.");
++    }
++    if (strategy === "select") {
++        if (surface === "work") {
++            modelLabel = WORK_MODELS[model];
++        } else {
++            modelLabel = {
++                "gpt-chat-latest": "Latest",
++                "gpt-6-astra": "Latest",
++                "gpt-5-pro": "Latest",
++                "gpt-5.6": "GPT-5.6 Sol",
++                "gpt-5.6-sol": "GPT-5.6 Sol",
++                "gpt-5.6-sol-pro": "GPT-5.6 Sol",
++                "gpt-5.5": "GPT-5.5",
++                "gpt-5.5-instant": "GPT-5.5",
++                "gpt-5.5-pro": "GPT-5.5",
++            }[model];
++            const required = model === "gpt-5.5-instant" ? "instant"
++                : ["gpt-6-astra", "gpt-5-pro", "gpt-5.6-sol-pro", "gpt-5.5-pro"].includes(model) ? "pro" : null;
++            if (required) {
++                if (level && level !== required) {
++                    throw new Error(`${model} in Chat requires ${modelLabel} + ${required}; use --browser-surface work for fixed-model reasoning levels.`);
++                }
++                level = required;
++            }
++        }
++        if (!modelLabel) throw new Error(`Model "${model}" is not supported in ChatGPT ${surface}. Choose a model from that surface's menu.`);
++        const levels = levelsForSelection(surface, modelLabel);
++        if (level && !levels) {
++            throw new Error("Work Default changes both model and intensity. Choose a fixed Work model before requesting a reasoning intensity.");
++        }
++        if (level && !levels.includes(level)) throw new Error(`${modelLabel} supports ${levels.join(", ")}, not ${level}.`);
++    }
++    if (researchMode === "deep" && (surface === "work" || level)) {
++        throw new Error("Deep Research has a separate control flow; do not combine it with Work or an explicit reasoning intensity.");
++    }
++    return { surface, requestedModel: model, modelLabel, level, strategy };
++}
+--- /dev/null
++++ b/dist/src/browser/actions/chatGptSelection.js
+@@ -0,0 +1,150 @@
++import { levelsForSelection, selectionCapabilities } from "../selectionPlan.js";
++
++export async function ensureChatGptSelection(Runtime, plan, logger, { observeOnly = false } = {}) {
++    const outcome = await Runtime.evaluate({
++        expression: `(${configureChatGptSelection.toString()})(${JSON.stringify(plan)}, ${JSON.stringify(observeOnly)}, ${JSON.stringify(selectionCapabilities(plan.surface))})`,
++        awaitPromise: true,
++        returnByValue: true,
++    });
++    if (outcome.exceptionDetails) throw new Error(outcome.exceptionDetails.exception?.description ?? outcome.exceptionDetails.text);
++    const result = outcome.result?.value;
++    if (!result || result.error) throw new Error(result?.error ?? "ChatGPT selection returned no evidence.");
++    if (result.surface !== plan.surface || (plan.modelLabel && result.modelLabel !== plan.modelLabel)) throw new Error("ChatGPT surface or model evidence does not match the request.");
++    const levels = levelsForSelection(result.surface, result.modelLabel);
++    if (plan.level && levels?.[result.sliderValue] !== plan.level) throw new Error("ChatGPT reasoning evidence does not match the requested intensity.");
++    const evidence = {
++        requestedModel: plan.requestedModel,
++        resolvedLabel: result.modelLabel,
++        surface: result.surface,
++        requestedLevel: plan.level,
++        resolvedLevel: levels?.[result.sliderValue] ?? null,
++        sliderValue: result.sliderValue,
++        sliderMax: result.sliderMax,
++        visibleLabel: result.visibleLabel,
++        strategy: plan.strategy,
++        status: observeOnly ? "observed" : "selected",
++        verified: plan.strategy === "select",
++        identityVerified: false,
++        source: "chatgpt-surface-model-slider",
++        capturedAt: new Date().toISOString(),
++    };
++    logger(`[browser] Selection: ${JSON.stringify(evidence)}`);
++    return evidence;
++}
++
++async function configureChatGptSelection(plan, observeOnly, capabilities) {
++    const pause = () => new Promise((resolve) => setTimeout(resolve, 100));
++    const visible = (node) => Boolean(node && !node.closest('[inert], [aria-hidden="true"]') && node.getBoundingClientRect().width && node.getBoundingClientRect().height);
++    const waitFor = async (read, description) => {
++        const deadline = Date.now() + 5000;
++        while (Date.now() < deadline) {
++            const value = read();
++            if (value) return value;
++            await pause();
++        }
++        throw new Error(`Unable to verify ${description}; no prompt was submitted.`);
++    };
++    const normalize = (text) => (text ?? "").replace(/\s+/g, " ").trim();
++    const canonicalModel = (text) => {
++        const label = normalize(text);
++        if (["Latest", "最新"].includes(label)) return "Latest";
++        if (label === "Default" || label.startsWith("Default ") || label.startsWith("默认")) return "Default";
++        return label;
++    };
++    const currentSurface = () => {
++        const selected = document.querySelector('[data-tpp-toggle-value][aria-checked="true"]');
++        return selected?.getAttribute("data-tpp-toggle-value") === "work" ? "work"
++            : selected?.getAttribute("data-tpp-toggle-value") === "chatgpt" ? "chat" : null;
++    };
++    const menu = () => document.querySelector('[data-testid="composer-intelligence-picker-content"]');
++    const modelItems = () => [...(menu()?.querySelectorAll('[role="menuitemradio"]') ?? [])];
++    const selectedModel = () => canonicalModel(modelItems().find((node) => node.getAttribute("aria-checked") === "true")?.innerText);
++    const slider = () => menu()?.querySelector('[role="slider"]');
++    const sliderValue = () => Number(slider()?.getAttribute("aria-valuenow"));
++    const closeMenu = async () => {
++        const target = menu()?.closest('[role="menu"]');
++        if (!target) return;
++        target.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
++        await waitFor(() => !menu(), "closed model menu");
++    };
++    const openMenu = async () => {
++        if (menu()) return;
++        const pill = await waitFor(() => [...document.querySelectorAll('main button.__composer-pill')].find(visible), "composer model control");
++        pill.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" }));
++        pill.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0, pointerType: "mouse" }));
++        await waitFor(menu, "model and reasoning menu");
++    };
++    try {
++        await waitFor(currentSurface, "Chat/Work controls");
++        if (currentSurface() !== plan.surface) {
++            if (observeOnly) throw new Error(`Existing conversation is in ${currentSurface()}, not ${plan.surface}.`);
++            await closeMenu();
++            const toggle = document.querySelector(`[data-tpp-toggle-value="${plan.surface === "work" ? "work" : "chatgpt"}"]`);
++            if (!visible(toggle)) throw new Error(`The ${plan.surface} surface is unavailable.`);
++            toggle.click();
++            await waitFor(() => currentSurface() === plan.surface, "surface switch");
++        }
++        await openMenu();
++        await waitFor(() => modelItems().length, "model options");
++        if (plan.modelLabel && selectedModel() !== plan.modelLabel) {
++            if (observeOnly) throw new Error(`Selected model is ${selectedModel()}, not ${plan.modelLabel}.`);
++            const option = modelItems().find((node) => canonicalModel(node.innerText) === plan.modelLabel);
++            if (!option) throw new Error(`Model ${plan.modelLabel} is absent from the ${plan.surface} menu.`);
++            if (!visible(option)) {
++                const expand = [...menu().querySelectorAll('[role="menuitem"][aria-expanded]')].find(visible);
++                if (!expand) throw new Error("Cannot open the model list.");
++                expand.click();
++                await waitFor(() => visible(modelItems().find((node) => canonicalModel(node.innerText) === plan.modelLabel)), "expanded model list");
++            }
++            modelItems().find((node) => canonicalModel(node.innerText) === plan.modelLabel).click();
++            await waitFor(() => selectedModel() === plan.modelLabel, "selected model");
++        }
++        const expectedModel = selectedModel();
++        if (!expectedModel) throw new Error("No selected model can be verified.");
++        if (!Object.hasOwn(capabilities, expectedModel)) throw new Error(`Unrecognized model ${expectedModel}.`);
++        const levels = capabilities[expectedModel];
++        if (![...menu().querySelectorAll('[aria-keyshortcuts]')].some(visible)) {
++            await closeMenu();
++            await openMenu();
++            await waitFor(() => [...(menu()?.querySelectorAll('[aria-keyshortcuts]') ?? [])].some(visible), "visible reasoning slider");
++        }
++        await waitFor(slider, "reasoning slider");
++        const max = Number(slider().getAttribute("aria-valuemax"));
++        const min = Number(slider().getAttribute("aria-valuemin"));
++        if (min !== 0 || !Number.isInteger(max) || max !== (levels?.length ?? 6) - 1) {
++            throw new Error("Reasoning slider layout has changed; refusing an unverified index mapping.");
++        }
++        if (plan.level) {
++            const target = levels?.indexOf(plan.level) ?? -1;
++            if (target < 0) throw new Error(`Reasoning intensity ${plan.level} is not available for ${expectedModel}.`);
++            if (observeOnly && sliderValue() !== target) throw new Error("Existing conversation has a different reasoning intensity.");
++            for (let attempts = 0; sliderValue() !== target && attempts <= max; attempts++) {
++                const previous = sliderValue();
++                const control = [...menu().querySelectorAll('[aria-keyshortcuts]')].find(visible);
++                if (!control) throw new Error("Reasoning slider keyboard control is unavailable.");
++                control.dispatchEvent(new KeyboardEvent("keydown", { key: target > previous ? "ArrowRight" : "ArrowLeft", bubbles: true }));
++                await waitFor(() => sliderValue() !== previous, "reasoning slider movement");
++            }
++            if (sliderValue() !== target) throw new Error("Requested reasoning intensity was not selected.");
++        }
++        await pause();
++        if (currentSurface() !== plan.surface || selectedModel() !== expectedModel) throw new Error("Surface or model changed while selecting reasoning intensity.");
++        const announcement = menu().querySelector('[data-testid="composer-model-picker-slider-simple-view"]')?.innerText ?? "";
++        const value = sliderValue();
++        const labels = {
++            instant: ["即时", "Instant"], low: ["轻度", "Low", "Light"], medium: ["中", "Medium"],
++            high: ["高", "High"], xhigh: ["极高", "Extra High"], max: ["最高", "Max"],
++            ultra: ["超高", "Ultra"], pro: ["Pro"],
++        };
++        const observedLevel = levels?.[value];
++        if (levels && !labels[observedLevel]?.some((label) => announcement.startsWith(`${label}，`) || announcement.startsWith(`${label},`) || announcement.startsWith(`${label}\n`) || announcement === label)) {
++            throw new Error(`Reasoning label does not match slider position: ${normalize(announcement)}.`);
++        }
++        const result = { surface: currentSurface(), modelLabel: expectedModel, sliderValue: value, sliderMax: max, visibleLabel: normalize(announcement) };
++        await closeMenu();
++        return result;
++    } catch (error) {
++        try { await closeMenu(); } catch {}
++        return { error: error.message };
++    }
++}

@@ -1,0 +1,1 @@
+export const MAX_REMOTE_ARTIFACT_BYTES = 512 * 1024 * 1024;

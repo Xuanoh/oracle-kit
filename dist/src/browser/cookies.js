@@ -1,0 +1,265 @@
+import { COOKIE_URLS } from "./constants.js";
+import { delay } from "./utils.js";
+import { getCookies } from "@steipete/sweet-cookie";
+export class ChromeCookieSyncError extends Error {
+}
+export async function clearStaleChatGptConversationCookies(Network, Target, logger, options = {}) {
+    try {
+        const preservedNames = new Set((options.preserveConversationIds ?? [])
+            .filter((id) => Boolean(id))
+            .map((id) => `conv_key_${id}`));
+        try {
+            const { targetInfos = [] } = await Target.getTargets();
+            for (const target of targetInfos) {
+                const conversationId = extractChatGptConversationId(target.url ?? "");
+                if (conversationId) {
+                    preservedNames.add(`conv_key_${conversationId}`);
+                }
+            }
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            logger(`[cookies] Failed to inspect active ChatGPT conversations; skipping stale cookie cleanup: ${message}`);
+            return 0;
+        }
+        const { cookies = [] } = await Network.getAllCookies();
+        const targets = cookies.filter((cookie) => isChatGptConversationCookie(cookie) && !preservedNames.has(String(cookie.name ?? "")));
+        if (targets.length === 0) {
+            return 0;
+        }
+        let deleted = 0;
+        for (const cookie of targets) {
+            try {
+                await Network.deleteCookies({
+                    name: cookie.name,
+                    domain: cookie.domain,
+                    path: cookie.path ?? "/",
+                });
+                deleted += 1;
+            }
+            catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                logger(`[cookies] Failed to clear a stale ChatGPT conversation cookie: ${message}`);
+            }
+        }
+        if (deleted > 0) {
+            logger(`[cookies] Cleared ${deleted} stale ChatGPT conversation cookie${deleted === 1 ? "" : "s"}.`);
+        }
+        return deleted;
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger(`[cookies] Failed to inspect ChatGPT conversation cookies: ${message}`);
+        return 0;
+    }
+}
+export async function syncCookies(Network, url, profile, logger, options = {}) {
+    const { allowErrors = false, filterNames, inlineCookies, cookiePath, waitMs = 0 } = options;
+    try {
+        // Learned: inline cookies are the most deterministic (avoid Keychain + profile ambiguity).
+        const cookies = inlineCookies?.length
+            ? normalizeInlineCookies(inlineCookies, new URL(url).hostname)
+            : await readChromeCookiesWithWait(url, profile, filterNames ?? undefined, cookiePath ?? undefined, waitMs, logger);
+        if (!cookies.length) {
+            return 0;
+        }
+        let applied = 0;
+        for (const cookie of cookies) {
+            const cookieWithUrl = attachUrl(cookie, url);
+            try {
+                // Learned: CDP will silently drop cookies without a url; always attach one.
+                const result = await Network.setCookie(cookieWithUrl);
+                if (result?.success) {
+                    applied += 1;
+                }
+            }
+            catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                logger(`Failed to set cookie ${cookie.name}: ${message}`);
+            }
+        }
+        return applied;
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (allowErrors) {
+            logger(`Cookie sync failed (continuing with override): ${message}`);
+            return 0;
+        }
+        throw error instanceof ChromeCookieSyncError ? error : new ChromeCookieSyncError(message);
+    }
+}
+async function readChromeCookiesWithWait(url, profile, filterNames, cookiePath, waitMs, logger) {
+    if (waitMs <= 0) {
+        return readChromeCookies(url, profile, filterNames, cookiePath);
+    }
+    let cookies = [];
+    let firstError;
+    try {
+        cookies = await readChromeCookies(url, profile, filterNames, cookiePath);
+    }
+    catch (error) {
+        firstError = error;
+    }
+    if (cookies.length > 0 && !firstError) {
+        return cookies;
+    }
+    const waitLabel = waitMs >= 1000 ? `${Math.round(waitMs / 1000)}s` : `${waitMs}ms`;
+    const message = firstError instanceof Error ? firstError.message : String(firstError ?? "");
+    if (firstError) {
+        logger(`[cookies] Cookie read failed (${message}); waiting ${waitLabel} then retrying once.`);
+    }
+    else {
+        logger(`[cookies] No cookies found; waiting ${waitLabel} then retrying once.`);
+    }
+    await delay(waitMs);
+    return readChromeCookies(url, profile, filterNames, cookiePath);
+}
+async function readChromeCookies(url, profile, filterNames, cookiePath) {
+    const origins = Array.from(new Set([stripQuery(url), ...COOKIE_URLS]));
+    const chromeProfile = cookiePath ?? profile ?? undefined;
+    const timeoutMs = readDuration("ORACLE_COOKIE_LOAD_TIMEOUT_MS", 5_000);
+    // Learned: read from multiple origins to capture auth cookies that land on chat.openai.com + atlas.
+    const { cookies, warnings } = await getCookies({
+        url,
+        origins,
+        names: filterNames?.length ? filterNames : undefined,
+        browsers: ["chrome"],
+        mode: "merge",
+        chromeProfile,
+        timeoutMs,
+    });
+    if (process.env.ORACLE_DEBUG_COOKIES === "1" && warnings.length) {
+        // eslint-disable-next-line no-console
+        console.log(`[cookies] sweet-cookie warnings:\n- ${warnings.join("\n- ")}`);
+    }
+    const merged = new Map();
+    for (const cookie of cookies) {
+        const normalized = toCdpCookie(cookie);
+        if (!normalized)
+            continue;
+        const key = `${normalized.domain ?? ""}:${normalized.name}`;
+        if (!merged.has(key))
+            merged.set(key, normalized);
+    }
+    return Array.from(merged.values());
+}
+function isChatGptConversationCookie(cookie) {
+    if (!cookie.name?.startsWith("conv_key_")) {
+        return false;
+    }
+    const domain = String(cookie.domain ?? "")
+        .replace(/^\./, "")
+        .toLowerCase();
+    return domain === "chatgpt.com" || domain === "chat.openai.com";
+}
+function extractChatGptConversationId(url) {
+    try {
+        const parsed = new URL(url);
+        const domain = parsed.hostname.toLowerCase();
+        if (domain !== "chatgpt.com" && domain !== "chat.openai.com") {
+            return undefined;
+        }
+        return parsed.pathname.match(/\/c\/([a-zA-Z0-9-]+)/)?.[1];
+    }
+    catch {
+        return undefined;
+    }
+}
+function normalizeInlineCookies(rawCookies, fallbackHost) {
+    const merged = new Map();
+    for (const cookie of rawCookies) {
+        if (!cookie?.name)
+            continue;
+        // Learned: inline cookies may omit url/domain; default to current host with a safe path.
+        const normalized = {
+            name: cookie.name,
+            value: cookie.value ?? "",
+            url: cookie.url,
+            domain: cookie.domain ?? fallbackHost,
+            path: cookie.path ?? "/",
+            expires: normalizeExpiration(cookie.expires),
+            secure: cookie.secure ?? true,
+            httpOnly: cookie.httpOnly ?? false,
+            sameSite: cookie.sameSite,
+        };
+        const key = `${normalized.domain ?? fallbackHost}:${normalized.name}`;
+        if (!merged.has(key)) {
+            merged.set(key, normalized);
+        }
+    }
+    return Array.from(merged.values());
+}
+function toCdpCookie(cookie) {
+    if (!cookie?.name)
+        return null;
+    const out = {
+        name: cookie.name,
+        value: cookie.value,
+        domain: cookie.domain,
+        path: cookie.path ?? "/",
+        secure: cookie.secure ?? true,
+        httpOnly: cookie.httpOnly ?? false,
+    };
+    if (typeof cookie.expires === "number")
+        out.expires = cookie.expires;
+    if (cookie.sameSite === "Lax" || cookie.sameSite === "Strict" || cookie.sameSite === "None") {
+        out.sameSite = cookie.sameSite;
+    }
+    return out;
+}
+function attachUrl(cookie, fallbackUrl) {
+    const cookieWithUrl = { ...cookie };
+    if (!cookieWithUrl.url) {
+        if (!cookieWithUrl.domain || cookieWithUrl.domain === "localhost") {
+            cookieWithUrl.url = fallbackUrl;
+        }
+        else if (!cookieWithUrl.domain.startsWith(".")) {
+            cookieWithUrl.url = `https://${cookieWithUrl.domain}`;
+        }
+    }
+    // When url is present, let Chrome derive the host from it; keeping domain can trigger CDP sanitization errors.
+    if (cookieWithUrl.url) {
+        // Learned: CDP rejects cookies with both url + domain in some cases; drop domain to avoid failures.
+        delete cookieWithUrl.domain;
+    }
+    return cookieWithUrl;
+}
+function stripQuery(url) {
+    try {
+        const parsed = new URL(url);
+        parsed.hash = "";
+        parsed.search = "";
+        return parsed.toString();
+    }
+    catch {
+        return url;
+    }
+}
+function normalizeExpiration(expires) {
+    if (!expires || Number.isNaN(expires)) {
+        return undefined;
+    }
+    const value = Number(expires);
+    if (value <= 0) {
+        return undefined;
+    }
+    // Units by magnitude (do not treat Unix seconds ~1.7e9 as milliseconds):
+    // - >= 1e15: Chrome/WebKit FILETIME microseconds since 1601
+    // - >= 1e12: Unix milliseconds
+    // - else: Unix seconds (sweet-cookie / Chromium Cookie.expires)
+    if (value >= 1_000_000_000_000_000) {
+        return Math.round(value / 1_000_000 - 11644473600);
+    }
+    if (value >= 1_000_000_000_000) {
+        return Math.round(value / 1000);
+    }
+    return Math.round(value);
+}
+function readDuration(envKey, defaultValueMs) {
+    const raw = process.env[envKey];
+    if (!raw)
+        return defaultValueMs;
+    const value = Number.parseInt(raw, 10);
+    return Number.isFinite(value) && value > 0 ? value : defaultValueMs;
+}
