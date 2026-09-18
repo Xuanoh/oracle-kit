@@ -2,6 +2,11 @@
 
 **让 Codex 遇到难题时，去问 ChatGPT，再回来继续做。**
 
+> Oracle Kit 基于 **Peter Steinberger 的 [steipete/oracle](https://github.com/steipete/oracle)** 二次开发。
+> 核心 CLI 来自上游；本仓库在此基础上增加了 Chat / Work 浏览器适配、模型与推理强度选择补丁，
+> 并整合了 Codex skill 和安装文档。本项目独立维护，非上游官方发行版。
+> 保留上游 [MIT 许可及版权声明](LICENSE)，具体来源见 [NOTICE.md](NOTICE.md)。
+
 Oracle Kit 给 Codex 提供了一条咨询另一个模型的通路。
 你说清楚想解决什么，Codex 负责整理问题、挑选项目文件，通过 Oracle 向 ChatGPT
 发起咨询，拿到回答后核查建议，再继续当前任务。
