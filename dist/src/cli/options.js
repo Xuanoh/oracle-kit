@@ -139,8 +139,9 @@ export function normalizeModelOption(value) {
     const trimmed = (value ?? "").trim();
     if (/^(?:latest|gpt-chat-latest)$/i.test(trimmed)) return "gpt-chat-latest";
     if (/^(?:default|gpt-work-default)$/i.test(trimmed)) return "gpt-work-default";
-    if (/^(?:chatgpt|gpt)[ -]?6(?:[ -]astra)?$/i.test(trimmed)) {
-        return "gpt-6-astra";
+    const gpt6 = trimmed.match(/^(?:chatgpt|gpt)[ -]?6(?:[ -](astra|sol|luna))?$/i);
+    if (gpt6) {
+        return `gpt-6-${(gpt6[1] ?? "astra").toLowerCase()}`;
     }
     return trimmed;
 }
@@ -284,8 +285,9 @@ export function isGpt56BrowserLabel(modelValue) {
 export function inferModelFromLabel(modelValue) {
     const normalized = normalizeModelOption(modelValue).toLowerCase();
     if (["gpt-chat-latest", "gpt-work-default"].includes(normalized)) return normalized;
-    if (/^(?:chatgpt|gpt)[ -]?6(?:[ ._-]|$)/.test(normalized) && normalized !== "gpt-6-astra") {
-        throw new InvalidArgumentError(`Unknown GPT-6 browser variant "${modelValue}". Use gpt-6-astra.`);
+    if (["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"].includes(normalized)) return normalized;
+    if (/^(?:chatgpt|gpt)[ -]?6(?:[ ._-]|$)/.test(normalized)) {
+        throw new InvalidArgumentError(`Unknown GPT-6 browser variant "${modelValue}". Use gpt-6-astra, gpt-6-sol, or gpt-6-luna; Sol and Luna require Work.`);
     }
     if (!normalized) {
         return DEFAULT_MODEL;

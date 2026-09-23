@@ -52,7 +52,8 @@ Oracle 提供第二意见；是否采纳，仍要通过代码、测试或原始�
 模型与推理强度选择、会话恢复和 API 使用说明。
 
 Kit 包含可独立使用的 **Oracle CLI**，以及指导 Codex 使用它的 **skill**。
-浏览器适配支持分别选择 Chat / Work、模型和推理强度，具体取决于账号界面。
+浏览器适配支持分别选择 Chat / Work、模型和推理强度，
+包括 Work 中的 GPT-6 Sol（最高 Ultra）和 GPT-6 Luna（最高 Max），具体取决于账号界面。
 当前连续对话仍有兼容性限制，见 [会话恢复](skills/oracle/references/followups.md)。
 
 ---

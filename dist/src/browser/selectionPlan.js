@@ -4,6 +4,8 @@ export const CHAT_LEVELS = ["instant", "medium", "high", "xhigh", "pro"];
 export const WORK_LEVELS = ["low", "medium", "high", "xhigh", "max", "ultra"];
 const WORK_MODELS = {
     "gpt-6-astra": "GPT-6 Astra",
+    "gpt-6-sol": "GPT-6 Sol",
+    "gpt-6-luna": "GPT-6 Luna",
     "gpt-5.6": "GPT-5.6 Sol",
     "gpt-5.6-sol": "GPT-5.6 Sol",
     "gpt-5.6-terra": "GPT-5.6 Terra",
@@ -33,7 +35,7 @@ export function levelsForSelection(surface, modelLabel) {
         if (!["Latest", "GPT-5.6 Sol", "GPT-5.5"].includes(modelLabel)) throw new Error(`Unsupported Chat model "${modelLabel}".`);
         return CHAT_LEVELS;
     }
-    if (modelLabel === "GPT-5.6 Luna") return WORK_LEVELS.slice(0, 5);
+    if (["GPT-6 Luna", "GPT-5.6 Luna"].includes(modelLabel)) return WORK_LEVELS.slice(0, 5);
     if (modelLabel === "GPT-5.5") return WORK_LEVELS.slice(0, 4);
     if (modelLabel === "Default") return null;
     if (Object.values(WORK_MODELS).includes(modelLabel)) return WORK_LEVELS;

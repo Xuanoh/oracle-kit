@@ -22,3 +22,10 @@ current dist/ snapshot is the installation source. Do not apply the patch again.
 Dependencies are obtained separately through npm and retain their own licenses.
 No browser profiles, cookies, API keys, Oracle sessions, validation session
 records, or research files are part of this repository.
+
+## September 23, 2026 update
+
+The current runtime adds GPT-6 Sol/Luna to Work model selection and handles
+secondary menu text such as retirement notices without treating it as a model
+name. Browser support does not establish API availability. The historical patch
+predates these edits; use the repository history for the current changes.

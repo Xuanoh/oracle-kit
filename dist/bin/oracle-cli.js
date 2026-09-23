@@ -227,7 +227,7 @@ program
     .addOption(new Option("--copy-markdown", "Copy the assembled markdown bundle to the clipboard; pair with --render to print it too.").default(false))
     .addOption(new Option("--copy").hideHelp().default(false))
     .option("-s, --slug <words>", "Custom session slug (3-5 words).")
-    .option("-m, --model <model>", 'Model target (gpt-5.5-pro default). Chat: latest, gpt-6-astra (Latest + Pro), gpt-5.6-sol, gpt-5.5; Work: default, gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5. Select interface with --browser-surface. API also supports other provider model IDs.', normalizeModelOption)
+    .option("-m, --model <model>", 'Model target (gpt-5.5-pro default). Chat: latest, gpt-6-astra (Latest + Pro), gpt-5.6-sol, gpt-5.5; Work: default, gpt-6-astra, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5. Select interface with --browser-surface. API also supports other provider model IDs.', normalizeModelOption)
     .addOption(new Option("--models <models>", 'Comma-separated API model list to query in parallel (e.g., "gpt-5.5-pro,gemini-3-pro").')
     .argParser(collectModelList)
     .default([]))

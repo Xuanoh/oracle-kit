@@ -6,8 +6,9 @@ unspecified difficult Oracle consultation; preserve a user's explicit choices.
 Use Work when requested or when the task specifically requires a fixed Work
 model and its reasoning options.
 
-The following menus were observed during the original local checks on
-2026-09-08. Availability may change with the account, quota, or rollout.
+The following menus were inspected on 2026-09-23. New GPT-6 Sol/Luna
+slider ranges were checked at every position; older models were also reselected.
+Availability may change with the account, quota, or rollout.
 
 | Surface | Model argument | Model menu | Allowed intensity |
 | --- | --- | --- | --- |
@@ -15,6 +16,8 @@ The following menus were observed during the original local checks on
 | Chat | `gpt-5.6-sol` | GPT-5.6 Sol | Same five levels |
 | Chat | `gpt-5.5` | GPT-5.5 | Same five levels |
 | Work | `gpt-6-astra` | GPT-6 Astra | `low medium high xhigh max ultra` |
+| Work | `gpt-6-sol` | GPT-6 Sol | Same six levels |
+| Work | `gpt-6-luna` | GPT-6 Luna | `low medium high xhigh max` |
 | Work | `gpt-5.6-sol` | GPT-5.6 Sol | Same six levels |
 | Work | `gpt-5.6-terra` | GPT-5.6 Terra | Same six levels |
 | Work | `gpt-5.6-luna` | GPT-5.6 Luna | `low medium high xhigh max` |
@@ -31,8 +34,16 @@ on another account. In this adapter, Chat `gpt-6-astra` (`gpt-6` alias) selects
 Latest + Pro; conflicting intensity flags fail. For fixed Astra +
 xhigh/max/ultra, the adapter expects Work. Inspect the actual menu before use.
 
-Work Default uses a six-position automatic ladder observed as:
-Terra Low → Sol Low → Sol Medium → Astra Low → Astra Medium → Astra Extra High.
+GPT-6 Sol and GPT-6 Luna are Work choices; do not map them to Chat Latest
+or to GPT-5.6 models. Their browser aliases include `GPT-6 Sol` / `GPT-6 Luna`.
+[Official Work model guidance](https://help.openai.com/en/articles/20001275/)
+confirms the surface distinction; the ranges above come from the inspected UI.
+
+The Chat GPT-5.5 menu currently includes a retirement subtitle. Match the model
+name separately from that subtitle; do not substitute a different model.
+
+Work Default uses a six-position automatic ladder. Its combinations have
+changed since the September 8 checks; do not assume a fixed model/level mapping.
 The CLI can select Default and retain its existing slider position. To request
 an exact reasoning intensity, select a fixed Work model instead.
 
@@ -46,11 +57,11 @@ oracle --engine browser --remote-chrome 127.0.0.1:9222 --browser-surface chat \
   -p "<question>" --file "src/**"
 ```
 
-Work Astra + Ultra:
+Work GPT-6 Sol + Ultra (use `gpt-6-luna` with `max` for Luna):
 
 ```bash
 oracle --engine browser --remote-chrome 127.0.0.1:9222 --browser-surface work \
-  --model gpt-6-astra --browser-thinking-time ultra \
+  --model gpt-6-sol --browser-thinking-time ultra \
   -p "<question>" --file "src/**"
 ```
 
@@ -89,8 +100,13 @@ strength. Resumed conversations are checked without changing their choices.
 Deep Research has its own flow and cannot be combined with Work or an explicit
 strength in this adapter.
 
-Fourteen live selection cases and their read-only rechecks passed without
-sending messages. End-to-end response generation was not exercised by those
-checks. Oracle Kit includes offline regression tests, a historical patch, and installation
+The 24 passing live selection checks on 2026-09-23 cover Chat models, the full GPT-6 Sol/Luna
+sliders, older Work models, and Default, followed by read-only rechecks.
+The opt-in repository script `node scripts/check-browser-selection.mjs` opens
+a temporary empty tab, sends no messages, restores the original selected
+model/level on each surface, and closes its tab. It requires a signed-in debug
+browser and changes model/level preferences during the check. It does not test
+end-to-end response generation or resolve the existing follow-up limitation.
+Oracle Kit includes offline regression tests, a historical patch, and installation
 notes. The historical patch is not a clean-upstream installer. An npm reinstall can
 overwrite the local patch. Do not substitute an unverified `npx` release.

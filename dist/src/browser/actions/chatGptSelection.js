@@ -46,7 +46,9 @@ async function configureChatGptSelection(plan, observeOnly, capabilities) {
     };
     const normalize = (text) => (text ?? "").replace(/\s+/g, " ").trim();
     const canonicalModel = (text) => {
-        const label = normalize(text);
+        // Menu items may add a second line, e.g. a retirement notice.
+        // Match the model's first line exactly, never a fuzzy name prefix.
+        const label = normalize((text ?? "").trim().split(/\r?\n/)[0]);
         if (["Latest", "最新"].includes(label)) return "Latest";
         if (label === "Default" || label.startsWith("Default ") || label.startsWith("默认")) return "Default";
         return label;

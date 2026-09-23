@@ -17,3 +17,7 @@ and its input cap remains conservatively 272k tokens.
 Model IDs and effort support in this snapshot are adapter configuration, not proof
 of current provider availability. Verify the intended API model against the
 provider documentation and the account before sending a paid request.
+
+Adding browser support for `gpt-6-sol` and `gpt-6-luna` does not verify API
+availability, limits, pricing, or effort settings. Explicit API model IDs remain
+provider values; this browser update adds no API capability or pricing presets.

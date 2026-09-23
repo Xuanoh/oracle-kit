@@ -1,6 +1,6 @@
 {
   "name": "@xuanoh/oracle-kit",
-  "version": "0.16.1-xuanoh.1",
+  "version": "0.16.1-xuanoh.2",
   "description": "Portable snapshot of a locally patched Oracle CLI with a Codex skill.",
   "keywords": [],
   "homepage": "https://github.com/Xuanoh/oracle-kit",

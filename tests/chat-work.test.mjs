@@ -27,6 +27,8 @@ test('Chat Astra means Latest + Pro, not a fixed Astra reasoning slider', () => 
 test('Work model limits match the observed menus', () => {
   const models = {
     'gpt-6-astra': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+    'gpt-6-sol': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+    'gpt-6-luna': ['low', 'medium', 'high', 'xhigh', 'max'],
     'gpt-5.6-sol': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
     'gpt-5.6-terra': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
     'gpt-5.6-luna': ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -45,7 +47,7 @@ test('Work model limits match the observed menus', () => {
 });
 
 test('unsupported surfaces and ambiguous combinations stop during preflight', () => {
-  for (const model of ['gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-work-default']) {
+  for (const model of ['gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-work-default']) {
     assert.throws(() => resolveChatGptSelection({ surface: 'chat', model }), /not supported/);
   }
   for (const thinkingTime of ['max', 'ultra']) {
@@ -94,6 +96,8 @@ test('CLI dry-run exposes surface, model menu and effective requested intensity'
   for (const [surface, model, level, expectedLabel] of [
     ['chat', 'latest', 'pro', 'Latest'],
     ['work', 'gpt-6-astra', 'ultra', 'GPT-6 Astra'],
+    ['work', 'gpt-6-sol', 'ultra', 'GPT-6 Sol'],
+    ['work', 'GPT-6 Luna', 'max', 'GPT-6 Luna'],
     ['work', 'gpt-5.6-luna', 'max', 'GPT-5.6 Luna'],
   ]) {
     const result = spawnSync(process.execPath, [`${root}/dist/bin/oracle-cli.js`, '--engine', 'browser', '--remote-chrome', '127.0.0.1:9222', '--browser-surface', surface,

@@ -21,6 +21,8 @@ const BROWSER_MODEL_LABELS = [
     ["gpt-5.6-terra", "GPT-5.6 Terra"],
     ["gpt-5.6-luna", "GPT-5.6 Luna"],
     ["gpt-6-astra", "GPT-6 Astra"],
+    ["gpt-6-sol", "GPT-6 Sol"],
+    ["gpt-6-luna", "GPT-6 Luna"],
     // Most specific first (e.g., "gpt-5.2-thinking" before "gpt-5.2")
     ["gpt-5.6-sol", "GPT-5.6 Sol"],
     ["gpt-5.6", "GPT-5.6 Sol"],

@@ -25,13 +25,33 @@ test('GPT-6 aliases resolve consistently across engines', () => {
 });
 
 test('unknown browser variants fail instead of downgrading; API IDs pass through', () => {
-  for (const model of ['gpt-6-luna', 'gpt-6-pro', 'gpt-6-astra-pro', 'gpt-6.1']) {
+  for (const model of ['gpt-6-terra', 'gpt-6-pro', 'gpt-6-astra-pro', 'gpt-6-sol-pro', 'gpt-6.1']) {
     assert.throws(() => options.inferModelFromLabel(model), /Unknown GPT-6/);
     assert.equal(options.resolveApiModel(model), model);
   }
   assert.equal(options.resolveApiModel('openai/gpt-6-astra'), 'openai/gpt-6-astra');
   assert.equal(options.inferModelFromLabel('gpt-5.6-sol'), 'gpt-5.6-sol');
   assert.equal(options.resolveApiModel('gpt-5.5-pro'), 'gpt-5.5-pro');
+});
+
+test('new GPT-6 Work models keep their identity through CLI normalization', async () => {
+  for (const variant of ['sol', 'luna']) {
+    const model = `gpt-6-${variant}`;
+    const label = `GPT-6 ${variant[0].toUpperCase()}${variant.slice(1)}`;
+    for (const alias of [model, label, label.replace('GPT-', 'ChatGPT ')]) {
+      assert.equal(options.inferModelFromLabel(alias), model);
+      for (const engine of ['browser', 'api']) {
+        const result = resolveRunOptionsFromConfig({ prompt: 'test', model: alias, engine, env: {} });
+        assert.equal(result.runOptions.model, model);
+        assert.equal(result.resolvedEngine, engine);
+      }
+    }
+    assert.equal(browser.mapModelToBrowserLabel(model), label);
+    const config = await browser.buildBrowserConfig({ model, browserSurface: 'work', browserThinkingTime: 'max' });
+    assert.equal(config.selectionPlan.modelLabel, label);
+    assert.equal(config.selectionPlan.level, 'max');
+    assert.equal(options.resolveApiModel(`openai/${model}`), `openai/${model}`);
+  }
 });
 
 test('Astra request uses documented model, effort and search tool', async () => {
